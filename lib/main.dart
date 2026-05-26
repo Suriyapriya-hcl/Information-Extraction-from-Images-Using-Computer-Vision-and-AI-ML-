@@ -74,7 +74,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     var request = http.MultipartRequest(
       'POST',
-      Uri.parse("http://127.0.0.1:8000/upload/"),
+      Uri.parse("http://10.0.2.2:8000/upload/"),
     );
 
     request.files.add(
@@ -116,13 +116,12 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     var response = await http.post(
-      Uri.parse("http://127.0.0.1:8000/ask/"),
+      Uri.parse("http://10.0.2.2:8000/ask/"),
       body: {
         "id": sessionId,
         "question": question,
       },
     );
-
     var data = jsonDecode(response.body);
 
     setState(() {
@@ -160,10 +159,9 @@ Widget buildImagePreview() {
       ),
     );
   }
-
   return Padding(
     padding: const EdgeInsets.symmetric(
-      horizontal: 60, // ✅ SAME as image → alignment fixed
+      horizontal: 60, // 
       vertical: 10,
     ),
     child: Card(
@@ -205,7 +203,7 @@ Widget buildImagePreview() {
   );
 }
 
-  // ✅ CHAT UI
+  
   Widget buildChatUI() {
     return Column(
       children: [
