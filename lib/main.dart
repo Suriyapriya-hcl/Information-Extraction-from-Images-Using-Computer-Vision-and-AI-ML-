@@ -9,6 +9,22 @@ void main() {
   runApp(const MyApp());
 }
 
+class SessionData {
+  String id;
+  Uint8List image;
+  Map<String, dynamic> extractedData;
+  List<Map<String, dynamic>> chatHistory;
+
+  SessionData({
+    required this.id,
+    required this.image,
+    required this.extractedData,
+    required this.chatHistory,
+  });
+}
+
+XFile? pickedFile;
+
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
@@ -20,8 +36,8 @@ class MyApp extends StatelessWidget {
         useMaterial3: true,
         textTheme: GoogleFonts.poppinsTextTheme(),
         colorScheme: ColorScheme.fromSeed(
-  seedColor: const Color(0xFF1565C0), // ✅ YOUR COLOR
-),
+          seedColor: const Color(0xFF1565C0),
+        ),
       ),
       home: const HomeScreen(),
     );
@@ -40,74 +56,92 @@ class _HomeScreenState extends State<HomeScreen> {
   bool isDataReady = false;
   bool showChat = false;
 
-  String sessionId = "";
-  Map<String, dynamic> extractedData = {};
-
-  List<Map<String, dynamic>> chatHistory = [];
+  List<SessionData> sessions = [];
+  int currentSessionIndex = -1;
 
   final picker = ImagePicker();
-  final TextEditingController questionController = TextEditingController();
+  final TextEditingController questionController =
+      TextEditingController();
 
-  // ✅ PICK IMAGE
-  Future pickImage() async {
-    final picked = await picker.pickImage(source: ImageSource.gallery);
+  SessionData? get currentSession {
+    if (currentSessionIndex == -1) return null;
+    return sessions[currentSessionIndex];
+  }
+
+  
+  Future pickImage(ImageSource source) async {
+    final picked = await picker.pickImage(source: source);
 
     if (picked != null) {
+      pickedFile = picked;
+
       final bytes = await picked.readAsBytes();
 
       setState(() {
         imageBytes = bytes;
         showChat = false;
         isDataReady = false;
-        extractedData = {};
-        sessionId = "";
-        chatHistory.clear();
       });
 
       await uploadImage();
     }
   }
 
-  // ✅ UPLOAD IMAGE
+
+  Future pickFromGallery() async {
+    await pickImage(ImageSource.gallery);
+  }
+  Future captureFromCamera() async {
+    await pickImage(ImageSource.camera);
+  }
+
   Future uploadImage() async {
-    if (imageBytes == null) return;
+    if (imageBytes == null || pickedFile == null) return;
 
     var request = http.MultipartRequest(
       'POST',
-      Uri.parse("http://10.0.2.2:8000/upload/"),
+      Uri.parse("http://10.155.123.62:8000/upload/"),
     );
 
     request.files.add(
-      http.MultipartFile.fromBytes('file', imageBytes!,
-          filename: "upload.png"),
+      http.MultipartFile.fromBytes(
+        'file',
+        imageBytes!,
+        filename: pickedFile!.name,
+      ),
     );
 
     var response = await request.send();
     var res = await http.Response.fromStream(response);
-
     var data = jsonDecode(res.body);
-    print("FULL API RESPONSE: $data");
-    setState(() {
-      sessionId = data["id"] ?? "";
-      extractedData = data["analysis"] ?? {};
-      isDataReady = true;
 
-      chatHistory.clear();
-      chatHistory.add({
-        "type": "image",
-        "data": imageBytes!,
-      });
+    final newSession = SessionData(
+      id: data["id"] ?? "",
+      image: imageBytes!,
+      extractedData: data["analysis"] ?? {},
+      chatHistory: [
+        {
+          "type": "image",
+          "data": imageBytes!,
+        }
+      ],
+    );
+
+    setState(() {
+      sessions.add(newSession);
+      currentSessionIndex = sessions.length - 1;
+      isDataReady = true;
     });
   }
 
-  // ✅ ASK QUESTION
   Future askQuestion() async {
-    if (questionController.text.isEmpty || sessionId.isEmpty) return;
+    if (questionController.text.isEmpty ||
+        currentSession == null) return;
 
     var question = questionController.text;
 
     setState(() {
-      chatHistory.add({
+      currentSession!.chatHistory.add({
         "type": "text",
         "q": question,
         "a": "Thinking..."
@@ -116,23 +150,26 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     var response = await http.post(
-      Uri.parse("http://10.0.2.2:8000/ask/"),
+      Uri.parse("http://10.155.123.62:8000/ask/"),
       body: {
-        "id": sessionId,
+        "id": currentSession!.id,
         "question": question,
       },
     );
+
     var data = jsonDecode(response.body);
 
     setState(() {
-      chatHistory[chatHistory.length - 1] = {
+      currentSession!.chatHistory[
+          currentSession!.chatHistory.length - 1] = {
         "type": "text",
         "q": question,
         "a": data["answer"] ?? "No answer"
       };
     });
   }
-Widget buildImagePreview() {
+
+  Widget buildImagePreview() {
     return Container(
       margin: const EdgeInsets.all(19),
       child: ClipRRect(
@@ -141,7 +178,7 @@ Widget buildImagePreview() {
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxHeight: 300),
             child: Image.memory(
-              imageBytes!,
+              currentSession!.image,
               fit: BoxFit.contain,
             ),
           ),
@@ -149,52 +186,73 @@ Widget buildImagePreview() {
       ),
     );
   }
+
   Widget buildTableView() {
-  if (extractedData.isEmpty) {
+  var data = currentSession!.extractedData;
+
+  if (data.isEmpty) {
     return const Padding(
       padding: EdgeInsets.all(20),
-      child: Text(
-        "No readable text detected",
-        style: TextStyle(color: Colors.grey),
-      ),
+      child: Text("No readable text detected"),
     );
   }
+
+  Color getConfidenceColor(String confidence) {
+    switch (confidence.toLowerCase()) {
+      case "high":
+        return Colors.green;
+      case "medium":
+        return Colors.orange;
+      case "low":
+        return Colors.red;
+      default:
+        return Colors.grey;
+    }
+  }
+
   return Padding(
-    padding: const EdgeInsets.symmetric(
-      horizontal: 60, // 
-      vertical: 10,
-    ),
+    padding: const EdgeInsets.symmetric(horizontal: 60, vertical: 10),
     child: Card(
       elevation: 5,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
         child: DataTable(
-          headingRowColor:
-    MaterialStateProperty.all(
-      const Color(0xFF1565C0).withOpacity(0.1), // ✅ light version
-    ),
-          columnSpacing: 50, // ✅ improves readability
           columns: const [
-            DataColumn(
-              label: Text(
-                "Field",
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-            DataColumn(
-              label: Text(
-                "Value",
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
+            DataColumn(label: Text("Field")),
+            DataColumn(label: Text("Value")),
           ],
-          rows: extractedData.entries.map((entry) {
+          rows: data.entries.map((entry) {
+            var valueObj = entry.value;
+
+            String value = valueObj is Map
+                ? valueObj["value"] ?? "Unclear"
+                : valueObj.toString();
+
+            String confidence = valueObj is Map
+                ? valueObj["confidence"] ?? ""
+                : "";
+
             return DataRow(cells: [
               DataCell(Text(entry.key)),
-              DataCell(Text(entry.value.toString())),
+              DataCell(
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(value),
+                    if (confidence.isNotEmpty)
+                      Text(
+                        confidence,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: getConfidenceColor(confidence),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ]);
           }).toList(),
         ),
@@ -202,15 +260,13 @@ Widget buildImagePreview() {
     ),
   );
 }
-
-  
   Widget buildChatUI() {
     return Column(
       children: [
         Expanded(
           child: ListView(
             padding: const EdgeInsets.all(16),
-            children: chatHistory.map((chat) {
+            children: currentSession!.chatHistory.map((chat) {
               if (chat["type"] == "image") {
                 return buildImagePreview();
               }
@@ -229,18 +285,18 @@ Widget buildImagePreview() {
     );
   }
 
-  // ✅ CHAT BUBBLE
   Widget chatBubble(String text, bool isUser) {
     return Align(
-      alignment:
-          isUser ? Alignment.centerRight : Alignment.centerLeft,
+      alignment: isUser
+          ? Alignment.centerRight
+          : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 6),
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           color: isUser
-    ? const Color(0xFF1565C0) // ✅ YOUR COLOR
-    : Colors.grey.shade200,
+              ? const Color(0xFF1565C0)
+              : Colors.grey.shade200,
           borderRadius: BorderRadius.circular(14),
         ),
         child: Text(
@@ -253,22 +309,8 @@ Widget buildImagePreview() {
     );
   }
 
-  // ✅ DATA UI
-  Widget buildDataUI() {
-    return SingleChildScrollView(
-      child: Column(
-        children: [
-          buildImagePreview(),
-          const SizedBox(height: 10),
-          buildTableView(),
-        ],
-      ),
-    );
-  }
-
-  // ✅ INPUT BAR
   Widget inputBar() {
-    return Container(
+    return Padding(
       padding: const EdgeInsets.all(10),
       child: Row(
         children: [
@@ -293,15 +335,52 @@ Widget buildImagePreview() {
     );
   }
 
-  // ✅ MAIN UI
+  Widget buildEmptyState() {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const Icon(Icons.description, size: 80),
+        const SizedBox(height: 10),
+        const Text("Upload an image to extract information"),
+        const SizedBox(height: 20),
+
+        ElevatedButton.icon(
+          onPressed: pickFromGallery,
+          icon: const Icon(Icons.upload),
+          label: const Text("Upload Image"),
+        ),
+        const SizedBox(height: 10),
+        ElevatedButton.icon(
+          onPressed: captureFromCamera,
+          icon: const Icon(Icons.camera_alt),
+          label: const Text("Use Camera"),
+        ),
+      ],
+    );
+  }
+
+  Widget buildDataUI() {
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          buildImagePreview(),
+          const SizedBox(height: 10),
+          buildTableView(),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Information Extraction from Image",style: TextStyle(color: Colors.white),),
+        title: const Text(
+          "Information Extraction from Image",
+          style: TextStyle(color: Colors.white),
+        ),
         centerTitle: true,
         backgroundColor: const Color(0xFF1565C0),
-        // ✅ BACK BUTTON
         leading: showChat
             ? IconButton(
                 icon: const Icon(Icons.arrow_back),
@@ -314,83 +393,58 @@ Widget buildImagePreview() {
             : null,
       ),
 
-      body: imageBytes == null
+      body: currentSession == null
           ? Center(child: buildEmptyState())
           : !isDataReady
-              ? const Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      CircularProgressIndicator(),
-                      SizedBox(height: 10),
-                      Text("Extracting information..."),
-                    ],
-                  ),
-                )
+              ? const Center(child: CircularProgressIndicator())
               : showChat
                   ? buildChatUI()
                   : buildDataUI(),
 
-      // ✅ FIXED FAB (NO OVERLAP)
-    floatingActionButton: (isDataReady && !showChat)
-    ? Padding(
-        padding: const EdgeInsets.only(
-          bottom: 20,
-          left: 25,   // ✅ move it slightly right
-          right: 10,
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            // ✅ LEFT → UPLOAD BUTTON (shifted right)
-            FloatingActionButton(
-  onPressed: pickImage,
-  backgroundColor: const Color(0xFF1565C0), // ✅ keep const
-  child: const Icon(
-    Icons.add_photo_alternate,
-    color: Colors.white, // ✅ simpler
-  ),
-),
-
-
-            // ✅ RIGHT → ASK BUTTON
-            if (extractedData.isNotEmpty)
-              FloatingActionButton.extended(
-                heroTag: "chat",
-                onPressed: () {
-                  setState(() => showChat = true);
-                },
-                icon: const Icon(Icons.chat,color: Colors.white),
-                label: const Text("Ask",style: TextStyle(color: Colors.white),),
-                backgroundColor: const Color(0xFF1565C0),
+      // ✅ TWO FAB BUTTONS
+      floatingActionButton: (isDataReady && !showChat)
+          ? Padding(
+              padding:
+                  const EdgeInsets.only(bottom: 20, left: 25, right: 10),
+              child: Row(
+                mainAxisAlignment:
+                    MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      FloatingActionButton(
+                        heroTag: "gallery",
+                        onPressed: pickFromGallery,
+                        backgroundColor: const Color(0xFF1565C0),
+                        child: const Icon(Icons.photo,
+                            color: Colors.white),
+                      ),
+                      const SizedBox(width: 10),
+                      FloatingActionButton(
+                        heroTag: "camera",
+                        onPressed: captureFromCamera,
+                        backgroundColor: const Color(0xFF1565C0),
+                        child: const Icon(Icons.camera_alt,
+                            color: Colors.white),
+                      ),
+                    ],
+                  ),
+                  if (currentSession!.extractedData.isNotEmpty)
+                    FloatingActionButton.extended(
+                      onPressed: () {
+                        setState(() => showChat = true);
+                      },
+                      icon: const Icon(Icons.chat,
+                          color: Colors.white),
+                      label: const Text("Ask",
+                          style: TextStyle(color: Colors.white)),
+                      backgroundColor:
+                          const Color(0xFF1565C0),
+                    ),
+                ],
               ),
-          ],
-        ),
-      )
-    : null,
-        
-    );
-  }
-
-  // ✅ EMPTY SCREEN
-  Widget buildEmptyState() {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        const Icon(Icons.description,
-            size: 80),
-        const SizedBox(height: 10),
-        const Text(
-          "Upload an image to extract information",
-          style: TextStyle(color: Colors.white),
-        ),
-        const SizedBox(height: 20),
-        ElevatedButton.icon(
-          onPressed: pickImage,
-          icon: const Icon(Icons.upload),
-          label: const Text("Upload Image"),
-        ),
-      ],
+            )
+          : null,
     );
   }
 }
